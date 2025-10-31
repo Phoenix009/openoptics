@@ -136,7 +136,7 @@ def clear_table(
         None
     """
 
-    assert backend == "Mininet"
+    if backend != "Mininet": return
     # print(f"Clear table {table_name} in sw {switch.name} via thrift port {switch.thrift_port}")
 
     rst = switch.cmd(
