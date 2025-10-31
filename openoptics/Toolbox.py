@@ -23,6 +23,17 @@ from .p4_mininet import P4Switch, P4Host
 
 from typing import List, Union
 
+## Import ns-3
+## can we import this based on the backend used?
+try:
+    from ns import ns
+except ModuleNotFoundError:
+    raise SystemExit(
+        "Error: ns3 Python module not found;"
+        " Python bindings may not be enabled"
+        " or your PYTHONPATH might not be properly configured"
+    )
+
 
 class BaseNetwork:
     """
@@ -107,6 +118,11 @@ class BaseNetwork:
         self.tor_json_path = tor_json_path
         self.cli_path = cli_path
 
+        # we are using this to get the ocs port from the node_id
+        self.nodeid_to_ocs_port = {}
+        self.ocs_ports = []
+        self.ocs = None
+
         self.use_webserver = use_webserver
 
         print("Setting up OpenOptics...")
@@ -171,8 +187,45 @@ class BaseNetwork:
         """Create nodes on the choice of backend"""
         if self.backend == "Mininet":
             self.create_nodes_mininet()
+        elif self.backend == "ns3":
+            self.create_nodes_ns3()
         else:
             raise ValueError(f"Unsupported backend {self.backend}")
+
+    def create_nodes_ns3(self):
+        """
+        Add OCS and Nodes to ns3 topology.
+
+        Creates the ns3 topology with OCS switch and ToR switches,
+        establishes connections between them.
+        To-do: Move backend-related code to a seperate class/file
+        """
+
+        tor_switches = ns.NodeContainer()
+        tor_switches.Create(self.nb_node)
+
+        ocs_switch = ns.NodeContainer()
+        ocs_switch.Create(1)
+
+        self.ocs = ocs_switch.Get(0)
+
+        # print "Build Topology"
+        csma = ns.CsmaHelper()
+
+        # todo: Do we want to set this to some cmd args?
+        csma.SetChannelAttribute("DataRate", ns.DataRateValue(ns.DataRate(5000000)))
+        csma.SetChannelAttribute("Delay", ns.TimeValue(ns.MilliSeconds(2)))
+
+        # Create the links, from each tor to ocs
+
+        for node_id in range(self.nb_node):
+            link = csma.Install(ns.NodeContainer(ns.NodeContainer(tor_switches.Get(node_id)), ocs_switch))
+            tor_port = link.Get(0)
+            ocs_port = link.Get(1)
+            self.ocs_ports.append(ocs_port)
+            self.nodeid_to_ocs_port[node_id] = ocs_port
+
+
 
     def create_nodes_mininet(self):
         """
@@ -278,7 +331,10 @@ class BaseNetwork:
         Returns:
             int: the OCS's port
         """
-        return port_id * self.nb_node + node_id
+        if self.backend == "Mininet":
+            return port_id * self.nb_node + node_id
+        elif self.backend == "ns3":
+            return self.nodeid_to_ocs_port.get(node_id)
 
     def setup_ocs(self):
         """
@@ -297,14 +353,32 @@ class BaseNetwork:
                 ocs_port2 = self.cal_node_port_to_ocs_port(node2, port2)
                 ocs_slice_port1_port2.append((ts, ocs_port1, ocs_port2))
 
-        ocs_commands = utils.gen_ocs_commands(ocs_slice_port1_port2)
+        if self.backend == "Mininet":
+            ocs_commands = utils.gen_ocs_commands(ocs_slice_port1_port2)
 
-        utils.load_table(
-            backend=self.backend,
-            switch=self.mininet_net.nameToNode["ocs"],  # to-be-updated
-            table_commands=ocs_commands,
-            print_flag=False,
-        )
+            utils.load_table(
+                backend=self.backend,
+                switch=self.mininet_net.nameToNode["ocs"],  # to-be-updated
+                table_commands=ocs_commands,
+                print_flag=False,
+            )
+        elif self.backend == "ns3":
+            ocs_helper = ns.OCSHelper()
+            ocs_helper.SetDeviceAttribute("TimeSliceCount", ns.UintegerValue(self.nb_time_slices))
+            ocs_helper.SetDeviceAttribute("TimeSliceDuration", ns.TimeValue(ns.MilliSeconds(self.time_slice_duration_ms)))
+
+            schedule = ns.OCSSchedule()
+
+            for (ts, ocs_port1, ocs_port2) in ocs_slice_port1_port2:
+                # bidirectional
+                schedule.insert(((ts, ocs_port1), ocs_port2))
+                schedule.insert(((ts, ocs_port2), ocs_port1))
+
+            ocs_helper.Install(self.ocs, self.ocs_ports, schedule)
+
+        else:
+            raise ValueError(f"Unsupported backend {self.backend}")
+
 
     def setup_nodes(self):
         """
