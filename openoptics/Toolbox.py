@@ -10,11 +10,11 @@
 
 import os
 import networkx as nx
-import openoptics.utils as utils
-from openoptics.DeviceManager import DeviceManager
-from openoptics.Dashboard import Dashboard
-from openoptics.OpticalCLI import OpticalCLI
-from openoptics.TimeFlowTable import Path, TimeFlowEntry
+# import openoptics.utils as utils
+# from openoptics.DeviceManager import DeviceManager
+# from openoptics.Dashboard import Dashboard
+# from openoptics.OpticalCLI import OpticalCLI
+# from openoptics.TimeFlowTable import Path, TimeFlowEntry
 
 from mininet.net import Mininet
 from mininet.topo import Topo
@@ -27,6 +27,12 @@ from typing import List, Union
 ## can we import this based on the backend used?
 try:
     from ns import ns
+
+    # ns.LogComponentEnableAll(ns.LOG_LEVEL_INFO);
+
+    ns.LogComponentEnable("UdpEchoClientApplication", ns.LOG_LEVEL_INFO);
+    ns.LogComponentEnable("UdpEchoServerApplication", ns.LOG_LEVEL_INFO);
+
 except ModuleNotFoundError:
     raise SystemExit(
         "Error: ns3 Python module not found;"
@@ -120,8 +126,10 @@ class BaseNetwork:
 
         # we are using this to get the ocs port from the node_id
         self.nodeid_to_ocs_port = {}
-        self.ocs_ports = []
+        self.ocs_ports = ns.NetDeviceContainer()
+        self.tor_ports = ns.NetDeviceContainer()
         self.ocs = None
+        self.tors = None
 
         self.use_webserver = use_webserver
 
@@ -201,8 +209,8 @@ class BaseNetwork:
         To-do: Move backend-related code to a seperate class/file
         """
 
-        tor_switches = ns.NodeContainer()
-        tor_switches.Create(self.nb_node)
+        self.tors = ns.NodeContainer()
+        self.tors.Create(self.nb_node)
 
         ocs_switch = ns.NodeContainer()
         ocs_switch.Create(1)
@@ -219,10 +227,11 @@ class BaseNetwork:
         # Create the links, from each tor to ocs
 
         for node_id in range(self.nb_node):
-            link = csma.Install(ns.NodeContainer(ns.NodeContainer(tor_switches.Get(node_id)), ocs_switch))
+            link = csma.Install(ns.NodeContainer(ns.NodeContainer(self.tors.Get(node_id)), ocs_switch))
             tor_port = link.Get(0)
             ocs_port = link.Get(1)
-            self.ocs_ports.append(ocs_port)
+            self.ocs_ports.Add(ocs_port)
+            self.tor_ports.Add(tor_port)
             self.nodeid_to_ocs_port[node_id] = ocs_port
 
 
@@ -371,8 +380,13 @@ class BaseNetwork:
 
             for (ts, ocs_port1, ocs_port2) in ocs_slice_port1_port2:
                 # bidirectional
-                schedule.insert(((ts, ocs_port1), ocs_port2))
-                schedule.insert(((ts, ocs_port2), ocs_port1))
+
+                ocs_port1_mac = ns.Mac48Address.ConvertFrom(ocs_port1.GetAddress())
+                ocs_port2_mac = ns.Mac48Address.ConvertFrom(ocs_port2.GetAddress())
+
+                # schedule.insert((long, ns.MacAddress), *ns.NetDevice)
+                schedule.insert(((ts, ocs_port1_mac), ocs_port2))
+                schedule.insert(((ts, ocs_port2_mac), ocs_port1))
 
             ocs_helper.Install(self.ocs, self.ocs_ports, schedule)
 
@@ -417,9 +431,13 @@ class BaseNetwork:
         Traffic Oblivious. Initializes DeviceManager, starts CLI, and handles
         network shutdown.
         """
-        self.start_monitor()
-        self.start_cli()
-        self.stop_network()
+        # self.start_monitor()
+        # self.start_cli()
+        # self.stop_network()
+
+        if self.backend == 'ns3':
+            ns.Simulator.Run()
+            ns.Simulator.Destroy()
 
     def start_traffic_aware(
         self, topo_func=None, routing_func=None, routing_mode=None, update_interval=1
@@ -648,11 +666,11 @@ class BaseNetwork:
 
         print("Deploying optical topologies...")
             
-        utils.clear_table(
-            backend=self.backend,
-            switch=self.mininet_net.nameToNode["ocs"],
-            table_name="MyIngress.ocs_schedule",
-        )
+        # utils.clear_table(
+        #     backend=self.backend,
+        #     switch=self.mininet_net.nameToNode["ocs"],
+        #     table_name="MyIngress.ocs_schedule",
+        # )
         self.setup_ocs()
 
         return True
@@ -720,7 +738,10 @@ class BaseNetwork:
     ##########################
 
     def add_time_flow_entry(
-        self, node_id, entries: Union[List[TimeFlowEntry],TimeFlowEntry], routing_mode="Per-hop"
+        self, 
+        node_id, 
+        entries
+        # : Union[List[TimeFlowEntry],TimeFlowEntry], routing_mode="Per-hop"
     ) -> bool:
         """
         Add the time flow entry(s) to the node.
@@ -758,7 +779,8 @@ class BaseNetwork:
 
     def deploy_routing(
         self,
-        paths: List[Path],
+        paths,
+        # : List[Path],
         routing_mode="Per-hop",
         arch_mode="TO",
         start_fresh=False,
