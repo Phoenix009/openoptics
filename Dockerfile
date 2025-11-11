@@ -1,6 +1,8 @@
 FROM ubuntu:24.04
 
-COPY . /openoptics/
+COPY ./openoptics /openoptics
+COPY ./openoptics-ns3 /openoptics-ns3
+
 WORKDIR /
 
 RUN apt-get update -qq && \
@@ -15,12 +17,11 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV CC=/usr/bin/gcc CXX=/usr/bin/g++
 
 RUN pip install --upgrade pip setuptools wheel packaging && \
-    pip install --no-cache-dir networkx cppyy numpy
+    pip install --no-cache-dir networkx cppyy numpy matplotlib
 
-WORKDIR /
+# WORKDIR /
+# RUN git clone --branch optical-switch git@gitlab.mpi-klsb.mpg.de:ylei/openoptics-ns3.git
 # COPY ./openoptics-ns3 /openoptics-ns3
-
-RUN git clone --branch optical-switch git@gitlab.mpi-klsb.mpg.de:ylei/openoptics-ns3.git /openoptics-ns3
 
 WORKDIR /openoptics-ns3
 RUN ./ns3 clean
