@@ -10,14 +10,11 @@
 
 import os
 import networkx as nx
+
 import openoptics.utils as utils
-# from openoptics.DeviceManager import DeviceManager
-# from openoptics.Dashboard import Dashboard
-# from openoptics.OpticalCLI import OpticalCLI
 from openoptics.TimeFlowTable import Path, TimeFlowEntry
-
 from openoptics.backend.backend_ns3 import BackendNs3
-
+from openoptics.backend.backend_mininet import BackendMininet
 
 from typing import List, Union
 
@@ -58,19 +55,13 @@ class BaseNetwork:
             use_webserver (bool, optional): Whether to use web server for dashboard (defaults to True)
         """
 
-        self.thrift_port = 9090  # default thrift port
-        self.host_tor_port = 0
-        self.tor_host_port = 10  # One host per ToR for now
-        assert nb_link > 0
-        self.tor_ocs_ports = list(range(nb_link))
         self.name = name
 
         self.backend = None
-
         if (backend == "ns3"):
             self.backend = BackendNs3()
-        # elif (backend == "Mininet"):
-        #     self.backend = BackendMininet()
+        elif (backend == "Mininet"):
+            self.backend = BackendMininet()
         else:
             raise ValueError(f"Unsupported backend {backend}")
 
@@ -80,7 +71,6 @@ class BaseNetwork:
         self.calendar_queue_mode = 0 if arch_mode == "TO" else 1
 
         self.slice_to_topo = {}
-        self.mininet_topo = None
         self.mininet_net = None
         self.nb_node = nb_node
         self.nb_link = nb_link
@@ -100,53 +90,6 @@ class BaseNetwork:
             str: Name of the network
         """
         return self.name
-
-    def start_monitor(self):
-        """
-        Start OpenOptics DeviceManager and Dashboard.
-
-        Initializes the monitoring system and starts the web dashboard
-        if use_webserver is enabled. The dashboard is accessible at
-        http://localhost:8001.
-        """
-        self.device_manager = DeviceManager(
-            self.mininet_net,
-            self.tor_ocs_ports,
-            nb_queue=self.nb_time_slices if self.arch_mode == "TO" else self.nb_node,
-        )
-
-        if self.use_webserver:
-            self.dashboard = Dashboard(
-                self.slice_to_topo,
-                self.device_manager,
-                self.nb_link,
-                nb_queue=self.nb_time_slices
-                if self.calendar_queue_mode == 0
-                else self.nb_node,
-            )
-            self.dashboard.start()
-            os.system(
-                "python3 /openoptics/openoptics/dashboard/manage.py runserver localhost:8001 > /dev/null 2>&1 &"
-            )
-            print("Access dashboard at http://localhost:8001")
-
-    def start_cli(self):
-        """
-        Start OpenOptics CLI.
-
-        Launches the command-line interface for interacting with the network.
-        """
-        OpticalCLI(self)
-
-    def stop_network(self):
-        """
-        Stop the network.
-
-        Stops the dashboard (if running) and the Mininet network.
-        """
-        if self.use_webserver:
-            self.dashboard.stop()
-        self.mininet_net.stop()
 
     def create_nodes(self):
         """Create nodes on the choice of backend"""
