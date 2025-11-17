@@ -10,36 +10,16 @@
 
 import os
 import networkx as nx
-# import openoptics.utils as utils
+import openoptics.utils as utils
 # from openoptics.DeviceManager import DeviceManager
 # from openoptics.Dashboard import Dashboard
 # from openoptics.OpticalCLI import OpticalCLI
-# from openoptics.TimeFlowTable import Path, TimeFlowEntry
+from openoptics.TimeFlowTable import Path, TimeFlowEntry
 
-# from mininet.net import Mininet
-# from mininet.topo import Topo
-# from mininet.link import Link
-# from .p4_mininet import P4Switch, P4Host
+from openoptics.backend.backend_ns3 import BackendNs3
+
 
 from typing import List, Union
-
-## Import ns-3
-## can we import this based on the backend used?
-try:
-    from ns import ns
-
-    # ns.LogComponentEnableAll(ns.LOG_LEVEL_INFO);
-
-    ns.LogComponentEnable("UdpEchoClientApplication", ns.LOG_LEVEL_INFO);
-    ns.LogComponentEnable("UdpEchoServerApplication", ns.LOG_LEVEL_INFO);
-
-except ModuleNotFoundError:
-    raise SystemExit(
-        "Error: ns3 Python module not found;"
-        " Python bindings may not be enabled"
-        " or your PYTHONPATH might not be properly configured"
-    )
-
 
 class BaseNetwork:
     """
@@ -83,9 +63,17 @@ class BaseNetwork:
         self.tor_host_port = 10  # One host per ToR for now
         assert nb_link > 0
         self.tor_ocs_ports = list(range(nb_link))
-
         self.name = name
-        self.backend = backend
+
+        self.backend = None
+
+        if (backend == "ns3"):
+            self.backend = BackendNs3()
+        # elif (backend == "Mininet"):
+        #     self.backend = BackendMininet()
+        else:
+            raise ValueError(f"Unsupported backend {backend}")
+
         self.nb_time_slices = 1
         self.time_slice_duration_ms = time_slice_duration_ms
         self.arch_mode = arch_mode
@@ -99,33 +87,6 @@ class BaseNetwork:
         self.nb_host_per_tor = nb_host_per_tor  # Number of hosts for each ToR
         self.ip_to_tor = {}
         self.nodes_created = False
-
-        """
-        ocs_sw_path=f"openopticslib/optical_switch/optical_switch"
-        ocs_json_path=f"openopticslib/ocs.json"
-        tor_sw_path=f"openopticslib/tor_switch/tor_switch"
-        tor_json_path=f"openopticslib/tor.json"
-        cli_path=f"openopticslib/runtime_CLI"
-        """
-        root = ""
-        ocs_sw_path = f"{root}/behavioral-model/targets/optical_switch/optical_switch"
-        ocs_json_path = f"{root}/openoptics/p4/ocs/ocs.json"
-        tor_sw_path = f"{root}/behavioral-model/targets/tor_switch/tor_switch"
-        tor_json_path = f"{root}/openoptics/p4/tor/tor.json"
-        cli_path = f"{root}/behavioral-model/targets/simple_switch/runtime_CLI"
-
-        self.ocs_sw_path = ocs_sw_path
-        self.ocs_json_path = ocs_json_path
-        self.tor_sw_path = tor_sw_path
-        self.tor_json_path = tor_json_path
-        self.cli_path = cli_path
-
-        # we are using this to get the ocs port from the node_id
-        self.nodeid_to_ocs_port = {}
-        self.ocs_ports = ns.NetDeviceContainer()
-        self.tor_ports = ns.NetDeviceContainer()
-        self.ocs = None
-        self.tors = None
 
         self.use_webserver = use_webserver
 
@@ -189,140 +150,7 @@ class BaseNetwork:
 
     def create_nodes(self):
         """Create nodes on the choice of backend"""
-        if self.backend == "Mininet":
-            self.create_nodes_mininet()
-        elif self.backend == "ns3":
-            self.create_nodes_ns3()
-        else:
-            raise ValueError(f"Unsupported backend {self.backend}")
-
-    def create_nodes_ns3(self):
-        """
-        Add OCS and Nodes to ns3 topology.
-
-        Creates the ns3 topology with OCS switch and ToR switches,
-        establishes connections between them.
-        To-do: Move backend-related code to a seperate class/file
-        """
-
-        self.tors = ns.NodeContainer()
-        self.tors.Create(self.nb_node)
-
-        ocs_switch = ns.NodeContainer()
-        ocs_switch.Create(1)
-
-        self.ocs = ocs_switch.Get(0)
-
-        # print "Build Topology"
-        csma = ns.CsmaHelper()
-
-        # todo: Do we want to set this to some cmd args?
-        csma.SetChannelAttribute("DataRate", ns.DataRateValue(ns.DataRate(5000000)))
-        csma.SetChannelAttribute("Delay", ns.TimeValue(ns.MilliSeconds(2)))
-
-        # Create the links, from each tor to ocs
-
-        for node_id in range(self.nb_node):
-            link = csma.Install(ns.NodeContainer(ns.NodeContainer(self.tors.Get(node_id)), ocs_switch))
-            tor_port = link.Get(0)
-            ocs_port = link.Get(1)
-            self.ocs_ports.Add(ocs_port)
-            self.tor_ports.Add(tor_port)
-            self.nodeid_to_ocs_port[node_id] = ocs_port
-
-
-
-    def create_nodes_mininet(self):
-        """
-        Add OCS and Nodes to Mininet Topo().
-
-        Creates the Mininet topology with OCS switch and ToR switches,
-        establishes connections between them, and starts the network.
-        To-do: Move backend-related code to a seperate class/file
-        """
-        os.system("mn -c > /dev/null 2>&1")
-
-        print("Setting up Mininet network...")
-        self.mininet_topo = Topo()
-        # Add switches to mininet topology, store metadata in self.nodes dictionary
-        ocs = self.mininet_topo.addSwitch(
-            "ocs",
-            dpid="0",
-            sw_path=self.ocs_sw_path,
-            json_path=self.ocs_json_path,
-            thrift_port=self.thrift_port,
-            pcap_dump=False,
-            nb_time_slices=self.nb_time_slices,
-            time_slice_duration_ms=self.time_slice_duration_ms,
-            cls=P4Switch,
-        )
-        self.thrift_port += 1
-        print("Optical switch created.")
-
-        for tor_id in range(self.nb_node):
-            tor_switch = self.mininet_topo.addSwitch(
-                f"tor{tor_id}",
-                dpid=f"{tor_id + 1}",
-                sw_path=self.tor_sw_path,
-                json_path=self.tor_json_path,
-                thrift_port=self.thrift_port,
-                pcap_dump=False,
-                tor_id=tor_id,
-                # In TA, we have a calendar queue for each node
-                nb_time_slices=self.nb_time_slices
-                if self.calendar_queue_mode == 0
-                else self.nb_node,
-                time_slice_duration_ms=self.time_slice_duration_ms,
-                calendar_queue_mode=self.calendar_queue_mode,
-                cls=P4Switch,
-            )
-            # OCS connect port 1 to tor1, port2 to tor2...
-            # ToR connect port 0 to the OCS
-            for link_id in range(self.nb_link):
-                self.mininet_topo.addLink(
-                    node1=ocs,
-                    node2=tor_switch,
-                    port1=self.cal_node_port_to_ocs_port(tor_id, link_id),
-                    port2=self.tor_ocs_ports[link_id],
-                )
-            self.thrift_port += 1
-
-            # Connect hosts to ToR switches
-            for _ in range(self.nb_host_per_tor):  # Default to 1
-                ip = f"10.0.{tor_id}.1"  # To-do: make it configurable in setting
-                mac = "00:aa:bb:00:00:%02x" % tor_id
-                host = self.mininet_topo.addHost("h" + str(tor_id), ip=ip, mac=mac)
-                # print(f"h{tor_id}: {ip} {mac}")
-                self.mininet_topo.addLink(
-                    node1=host,
-                    node2=tor_switch,
-                    port1=self.host_tor_port,
-                    port2=self.tor_host_port,
-                    # cls=TCLink,
-                    cls=Link,
-                    bw=1000,
-                    loss=0,
-                )
-                self.ip_to_tor[ip] = tor_id
-
-        print(f"{self.nb_node} ToR switches created.")
-        # for link in self.mininet_topo.links(withKeys=True, withInfo=True):
-        #    print(link)
-        print("Starting Mininet network...")
-        self.mininet_net = Mininet(
-            self.mininet_topo, host=P4Host, switch=P4Switch, controller=None
-        )
-        self.mininet_net.staticArp()
-
-        for id in range(self.nb_node):
-            h = self.mininet_net.get(f"h{id}")
-            ip = f"10.0.{id}.1"
-            mac = "00:aa:bb:00:00:%02x" % id
-            h.setARP(ip, mac)
-
-        self.mininet_net.start()
-
-        self.setup_nodes()
+        self.backend.create_nodes(self.nb_node)
 
     def cal_node_port_to_ocs_port(self, node_id, port_id):
         """
@@ -335,10 +163,8 @@ class BaseNetwork:
         Returns:
             int: the OCS's port
         """
-        if self.backend == "Mininet":
-            return port_id * self.nb_node + node_id
-        elif self.backend == "ns3":
-            return self.nodeid_to_ocs_port.get(node_id)
+
+        return self.backend.cal_node_port_to_ocs_port(node_id, port_id)
 
     def setup_ocs(self):
         """
@@ -357,68 +183,7 @@ class BaseNetwork:
                 ocs_port2 = self.cal_node_port_to_ocs_port(node2, port2)
                 ocs_slice_port1_port2.append((ts, ocs_port1, ocs_port2))
 
-        if self.backend == "Mininet":
-            ocs_commands = utils.gen_ocs_commands(ocs_slice_port1_port2)
-
-            utils.load_table(
-                backend=self.backend,
-                switch=self.mininet_net.nameToNode["ocs"],  # to-be-updated
-                table_commands=ocs_commands,
-                print_flag=False,
-            )
-        elif self.backend == "ns3":
-            ocs_helper = ns.OCSHelper()
-            ocs_helper.SetDeviceAttribute("TimeSliceCount", ns.UintegerValue(self.nb_time_slices))
-            ocs_helper.SetDeviceAttribute("TimeSliceDuration", ns.TimeValue(ns.MilliSeconds(self.time_slice_duration_ms)))
-
-            schedule = ns.OCSSchedule()
-
-            for (ts, ocs_port1, ocs_port2) in ocs_slice_port1_port2:
-                # bidirectional
-
-                ocs_port1_mac = ns.Mac48Address.ConvertFrom(ocs_port1.GetAddress())
-                ocs_port2_mac = ns.Mac48Address.ConvertFrom(ocs_port2.GetAddress())
-
-                # schedule.insert((long, ns.MacAddress), *ns.NetDevice)
-                schedule.insert(((ts, ocs_port1_mac), ocs_port2))
-                schedule.insert(((ts, ocs_port2_mac), ocs_port1))
-
-            ocs_helper.Install(self.ocs, self.ocs_ports, schedule)
-
-        else:
-            raise ValueError(f"Unsupported backend {self.backend}")
-
-
-    def setup_nodes(self):
-        """
-        Load utility tables into nodes.
-
-        Configures the ToR switches with necessary routing and forwarding tables
-        including IP to destination mappings, arrival verification, and port calculation.
-        """
-
-        print("Setting up switch tables...")
-
-        ip_to_dst_commands = utils.tor_table_ip_to_dst(self.ip_to_tor)
-
-        for tor_id in range(self.nb_node):
-            arrive_at_dst = utils.tor_table_arrive_at_dst(tor_id, self.tor_host_port)
-            verify_desired_node = utils.tor_table_verify_desired_node(tor_id)
-            cal_port_enqueue = utils.tor_table_cal_port_slice_to_node(
-                tor_id, self.slice_to_topo
-            )
-
-            switch = self.mininet_net.nameToNode[f"tor{tor_id}"]
-            utils.load_table(
-                backend=self.backend,
-                switch=switch,
-                table_commands=ip_to_dst_commands
-                + arrive_at_dst
-                + verify_desired_node
-                + cal_port_enqueue,
-                print_flag=False,
-                save_flag=False,
-            )
+        self.backend.setup_ocs(ocs_slice_port1_port2, self.nb_time_slices, self.time_slice_duration_ms)
 
     def start(self):
         """
@@ -427,13 +192,8 @@ class BaseNetwork:
         Traffic Oblivious. Initializes DeviceManager, starts CLI, and handles
         network shutdown.
         """
-        # self.start_monitor()
-        # self.start_cli()
-        # self.stop_network()
+        self.backend.start()
 
-        if self.backend == 'ns3':
-            ns.Simulator.Run()
-            ns.Simulator.Destroy()
 
     def start_traffic_aware(
         self, topo_func=None, routing_func=None, routing_mode=None, update_interval=1
@@ -736,8 +496,8 @@ class BaseNetwork:
     def add_time_flow_entry(
         self, 
         node_id, 
-        entries
-        # : Union[List[TimeFlowEntry],TimeFlowEntry], routing_mode="Per-hop"
+        entries: Union[List[TimeFlowEntry],TimeFlowEntry], 
+        routing_mode="Per-hop"
     ) -> bool:
         """
         Add the time flow entry(s) to the node.
@@ -775,8 +535,7 @@ class BaseNetwork:
 
     def deploy_routing(
         self,
-        paths,
-        # : List[Path],
+        paths: List[Path],
         routing_mode="Per-hop",
         arch_mode="TO",
         start_fresh=False,
