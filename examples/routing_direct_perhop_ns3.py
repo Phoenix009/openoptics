@@ -1,6 +1,5 @@
 import os
 import sys
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from openoptics import Toolbox, OpticalTopo, OpticalRouting
@@ -20,24 +19,24 @@ except ModuleNotFoundError:
         " or your PYTHONPATH might not be properly configured"
     )
 
-def setup_echo_server_client(net):
+def setup_echo_server_client(nodes, node_ports):
     # Add internet stack to the terminals
 
     internet = ns.InternetStackHelper()
-    internet.Install(net.backend.tors)
+    internet.Install(nodes)
 
     # We've got the "hardware" in place.  Now we need to add IP addresses.
     #
     ipv4 = ns.Ipv4AddressHelper()
     ipv4.SetBase(ns.Ipv4Address("10.1.1.0"), ns.Ipv4Mask("255.255.255.0"))
-    ipv4.Assign(net.backend.tor_ports)
+    ipv4.Assign(node_ports)
 
     #
     # Create UDP echo server on node 0 and client on node 1
     port = 9  # Discard port (RFC 863)
 
     echoServer = ns.UdpEchoServerHelper(port)
-    serverApps = echoServer.Install(net.backend.tors.Get(0))
+    serverApps = echoServer.Install(nodes.Get(0))
     serverApps.Start(ns.Seconds(1))
     serverApps.Stop(ns.Seconds(20))
 
@@ -46,7 +45,7 @@ def setup_echo_server_client(net):
     echoClient.SetAttribute("Interval", ns.TimeValue(ns.Seconds(1)))
     echoClient.SetAttribute("PacketSize", ns.UintegerValue(1024))
 
-    clientApps = echoClient.Install(ns.NodeContainer(net.backend.tors.Get(1)))
+    clientApps = echoClient.Install(ns.NodeContainer(nodes.Get(1)))
     clientApps.Start(ns.Seconds(2))
     clientApps.Stop(ns.Seconds(20))
 
@@ -65,10 +64,28 @@ if __name__ == "__main__":
     # print(circuits)
     assert net.deploy_topo(circuits)
 
-    setup_echo_server_client(net)
 
-    # paths = OpticalRouting.routing_direct(net.get_topo())
-    # net.deploy_routing(paths, routing_mode="Per-hop")
+    paths = OpticalRouting.routing_direct(net.get_topo())
+    net.deploy_routing(paths, routing_mode="Per-hop")
+
+
+    host_count = net.backend.hosts.GetN()
+
+    echoServerNode = net.backend.hosts.Get(0)
+    echoClientNode = net.backend.hosts.Get(host_count-1)
+    echoNodes = ns.NodeContainer()
+    echoNodes.Add(echoServerNode)
+    echoNodes.Add(echoClientNode)
+
+    echoServerPort = net.backend.host_tor_ports.Get(0)
+    echoClientPort = net.backend.host_tor_ports.Get(host_count-1)
+    echoPorts = ns.NetDeviceContainer()
+    echoPorts.Add(echoServerPort)
+    echoPorts.Add(echoClientPort)
+
+    setup_echo_server_client(echoNodes, echoPorts)
+
+    ns.TimeflowBridgeNetDevice.PopulateStaticArp(echoNodes)
 
     net.start()
 
