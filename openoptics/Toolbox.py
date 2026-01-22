@@ -14,7 +14,7 @@ import networkx as nx
 import openoptics.utils as utils
 from openoptics.TimeFlowTable import Path, TimeFlowEntry
 from openoptics.backend.backend_ns3 import BackendNs3
-from openoptics.backend.backend_mininet import BackendMininet
+# from openoptics.backend.backend_mininet import BackendMininet
 
 from typing import List, Union
 
@@ -59,7 +59,13 @@ class BaseNetwork:
 
         self.backend = None
         if (backend == "ns3"):
-            self.backend = BackendNs3()
+            self.backend = BackendNs3(
+                nb_node,
+                nb_link,
+                nb_host_per_tor,
+                time_slice_duration_ms,
+                arch_mode
+            )
         elif (backend == "Mininet"):
             self.backend = BackendMininet()
         else:
@@ -93,7 +99,7 @@ class BaseNetwork:
 
     def create_nodes(self):
         """Create nodes on the choice of backend"""
-        self.backend.create_nodes(self.nb_node)
+        self.backend.create_nodes()
 
     def cal_node_port_to_ocs_port(self, node_id, port_id):
         """
@@ -353,6 +359,7 @@ class BaseNetwork:
                 return False
 
         self.nb_time_slices = len(self.slice_to_topo.keys())
+        self.backend.nb_time_slices = self.nb_time_slices
         if self.nb_time_slices == 0:
             raise Exception("No time slices deployed.")
 
@@ -513,5 +520,5 @@ class BaseNetwork:
         #    print("Warning: Paths are not complete.")
 
         for src, entries in entry_dict.items():
-            self.add_time_flow_entry(src, entries, routing_mode=routing_mode)
+            self.backend.add_time_flow_entry(src, entries, routing_mode=routing_mode)
         return True
