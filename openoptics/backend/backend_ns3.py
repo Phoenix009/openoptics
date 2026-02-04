@@ -186,7 +186,7 @@ class BackendNs3(Backend):
             raise ValueError("entries must be a TimeFlowEntry or a list of TimeFlowEntry")
         
         if routing_mode == "Source":
-            assert False, "Not implemented perhop routing in ns3 backend"
+            assert False, "Not implemented source routing in ns3 backend"
             # for entry in entries:
             #     commands += utils.tor_table_routing_source(entry, nb_time_slices=self.nb_time_slices)
         elif routing_mode == "Per-hop":

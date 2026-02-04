@@ -7,6 +7,7 @@ from .p4_mininet import P4Switch, P4Host
 
 from openoptics.DeviceManager import DeviceManager
 from openoptics.Dashboard import Dashboard
+from openoptics.TimeFlowTable import TimeFlowEntry
 from openoptics.OpticalCLI import OpticalCLI
 import openoptics.utils as utils
 from openoptics.backend.backend_base import Backend
@@ -91,6 +92,9 @@ class BackendMininet(Backend):
             )
             # OCS connect port 1 to tor1, port2 to tor2...
             # ToR connect port 0 to the OCS
+            #? Why are we adding multiple links between the tor and ocs ?
+            # - we have multiple links from the tor to the ocs
+            # - appropriate links are specified in the routin table
             for link_id in range(self.nb_link):
                 self.mininet_topo.addLink(
                     node1=ocs,
@@ -232,3 +236,33 @@ class BackendMininet(Backend):
         self.start_monitor()
         self.start_cli()
         self.stop_network()
+
+
+    def add_time_flow_entry(
+        self, 
+        node_id, 
+        entries, # Union[List[TimeFlowEntry],TimeFlowEntry], 
+        routing_mode="Per-hop"
+    ):
+        if isinstance(entries, TimeFlowEntry):
+            entries = [entries]
+        elif not isinstance(entries, list):
+            raise ValueError("entries must be a TimeFlowEntry or a list of TimeFlowEntry")
+        
+        commands = ""
+        if routing_mode == "Source":
+            for entry in entries:
+                commands += utils.tor_table_routing_source(entry, nb_time_slices=self.nb_time_slices)
+        elif routing_mode == "Per-hop":
+            for entry in entries:
+                commands += utils.tor_table_routing_per_hop(entry, nb_time_slices=self.nb_time_slices)
+        else:
+            assert False, "Unsupported routing mode"
+
+        if f"tor{node_id}" not in self.mininet_net.nameToNode.keys():
+            print(f"Error: Try deploying paths to non-existent node: node{node_id}.")
+            return False
+
+        node = self.mininet_net.nameToNode[f"tor{node_id}"]
+        #print(f"Load to ToR{node_id}:\n {commands}")
+        return utils.load_table(self.backend, node, commands)

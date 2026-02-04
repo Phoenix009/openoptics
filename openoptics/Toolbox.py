@@ -86,8 +86,6 @@ class BaseNetwork:
 
         self.use_webserver = use_webserver
 
-        print("Setting up OpenOptics...")
-
     def __str__(self) -> str:
         """
         Return string representation of the network.
@@ -370,8 +368,7 @@ class BaseNetwork:
             self.create_nodes()
             self.nodes_created = True
 
-        print("Deploying optical topologies...")
-            
+
         # utils.clear_table(
         #     backend=self.backend,
         #     switch=self.mininet_net.nameToNode["ocs"],
@@ -460,28 +457,9 @@ class BaseNetwork:
         Returns:
             bool: Whether the entries were successfully added.
         """
-        if isinstance(entries, TimeFlowEntry):
-            entries = [entries]
-        elif not isinstance(entries, list):
-            raise ValueError("entries must be a TimeFlowEntry or a list of TimeFlowEntry")
-        
-        commands = ""
-        if routing_mode == "Source":
-            for entry in entries:
-                commands += utils.tor_table_routing_source(entry, nb_time_slices=self.nb_time_slices)
-        elif routing_mode == "Per-hop":
-            for entry in entries:
-                commands += utils.tor_table_routing_per_hop(entry, nb_time_slices=self.nb_time_slices)
-        else:
-            assert False, "Unsupported routing mode"
 
-        if f"tor{node_id}" not in self.mininet_net.nameToNode.keys():
-            print(f"Error: Try deploying paths to non-existent node: node{node_id}.")
-            return False
+        self.backend.add_time_flow_entry(node_id, entries, routing_mode=routing_mode)
 
-        node = self.mininet_net.nameToNode[f"tor{node_id}"]
-        #print(f"Load to ToR{node_id}:\n {commands}")
-        return utils.load_table(self.backend, node, commands)
 
     def deploy_routing(
         self,
