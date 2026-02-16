@@ -173,7 +173,9 @@ class BackendMininet(Backend):
             )
 
     def cal_node_port_to_ocs_port(self, node_id, port_id):
+        # todo: the calculation seems wrong.
         return port_id * self.nb_node + node_id
+        return node_id * self.nb_node + port_id
 
     def setup_ocs(self, ocs_slice_port1_port2):
         ocs_commands = utils.gen_ocs_commands(ocs_slice_port1_port2)

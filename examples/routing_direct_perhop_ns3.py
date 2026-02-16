@@ -20,18 +20,6 @@ except ModuleNotFoundError:
     )
 
 def setup_echo_server_client(nodes, node_ports):
-    # Add internet stack to the terminals
-
-    internet = ns.InternetStackHelper()
-    internet.Install(nodes)
-
-    # We've got the "hardware" in place.  Now we need to add IP addresses.
-    #
-    ipv4 = ns.Ipv4AddressHelper()
-    ipv4.SetBase(ns.Ipv4Address("10.1.1.0"), ns.Ipv4Mask("255.255.255.0"))
-    ipv4.Assign(node_ports)
-
-    #
     # Create UDP echo server on node 0 and client on node 1
     port = 9  # Discard port (RFC 863)
 
@@ -68,7 +56,6 @@ if __name__ == "__main__":
     paths = OpticalRouting.routing_direct(net.get_topo())
     net.deploy_routing(paths, routing_mode="Per-hop")
 
-
     host_count = net.backend.hosts.GetN()
 
     echoServerNode = net.backend.hosts.Get(0)
@@ -84,8 +71,6 @@ if __name__ == "__main__":
     echoPorts.Add(echoClientPort)
 
     setup_echo_server_client(echoNodes, echoPorts)
-
-    ns.TimeflowBridgeNetDevice.PopulateStaticArp(echoNodes)
 
     net.start()
 
