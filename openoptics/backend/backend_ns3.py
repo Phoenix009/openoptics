@@ -26,12 +26,27 @@ class BackendNs3(Backend):
         self.ocs = None
 
         self.tors = None
+        
+        # gives the net device object for the tor
+        # index using the tor_id
         self.tor_net_devices = ns.NetDeviceContainer()
+
+        # gives the port net device object for the tor_id and port_id
+        # index using the tor_id * nb_link + (port_id or link_id)
         self.tor_ocs_ports = ns.NetDeviceContainer()
+
+        # gives the port net device object for the ocs connected to the (tor_id, port_id)
+        # index using the tor_id * nb_link + (port_id or link_id)
         self.ocs_tor_ports = ns.NetDeviceContainer()
 
         self.hosts = None
+
+        # gives the net device object for the host (host_id) connected to tor (tor_id)
+        # index using the tor_id * nb_host_per_tor + host_id
         self.host_tor_ports = ns.NetDeviceContainer()
+
+        # gives the net device object for the tor (tor_id) connected to host (host_id)
+        # index using the tor_id * nb_host_per_tor + host_id
         self.tor_host_ports = ns.NetDeviceContainer()
 
         self.nb_time_slices = None
@@ -45,6 +60,27 @@ class BackendNs3(Backend):
         self.nb_host_per_tor = nb_host_per_tor  # Number of hosts for each ToR
         self.nodes_created = False
 
+    def _connect_host_tor(self, tor_id, port_helper):
+        tor_node = self.tors.Get(tor_id)
+
+        host_ports = ns.NetDeviceContainer()
+        tor_ports = ns.NetDeviceContainer()
+
+        for host in range(self.nb_host_per_tor):
+            host_id = (tor_id * self.nb_host_per_tor) + host
+            host_tor_link = port_helper.Install(ns.NodeContainer(
+                    ns.NodeContainer(self.hosts.Get(host_id)),
+                    ns.NodeContainer(tor_node),
+                ))
+            host_port = host_tor_link.Get(0)
+            host_ports.Add(host_port)
+
+            tor_port = host_tor_link.Get(1)
+            tor_ports.Add(tor_port)
+
+        return host_ports, tor_ports
+
+    
     def create_nodes(self):
         """
         Add OCS and Nodes to ns3 topology.
@@ -65,10 +101,12 @@ class BackendNs3(Backend):
 
         self.ocs = ocs_switch.Get(0)
 
+        # todo: can take these as cmd args
         timeflow_port_helper = ns.TimeflowPortHelper()
         timeflow_port_helper.SetDeviceAttribute("DataRate", ns.DataRateValue(ns.DataRate(5000000)))
         timeflow_port_helper.SetChannelAttribute("Delay", ns.TimeValue(ns.MilliSeconds(2)))
 
+        # todo: can take these as cmd args
         timeflow_bridge_helper = ns.TimeflowBridgeHelper()
         timeflow_bridge_helper.SetDeviceAttribute("TimeSliceCount", ns.UintegerValue(int(self.nb_time_slices)))
         timeflow_bridge_helper.SetDeviceAttribute("TimeSliceDuration", ns.TimeValue(ns.MilliSeconds(self.time_slice_duration_ms)))
@@ -76,40 +114,34 @@ class BackendNs3(Backend):
         for tor_id in range(self.nb_node):
             tor_node = self.tors.Get(tor_id)
 
-            host_ports = ns.NetDeviceContainer()
-            tor_ports = ns.NetDeviceContainer()
-
-            for host in range(self.nb_host_per_tor):
-                host_id = (tor_id * self.nb_host_per_tor) + host
-                host_tor_link = timeflow_port_helper.Install(ns.NodeContainer(
-                        ns.NodeContainer(self.hosts.Get(host_id)),
-                        ns.NodeContainer(tor_node),
-                    ))
-                host_port = host_tor_link.Get(0)
-                host_ports.Add(host_port)
-
-                tor_port = host_tor_link.Get(1)
-                tor_ports.Add(tor_port)
+            host_ports, tor_ports = self._connect_host_tor(tor_id, timeflow_port_helper)
 
             self.host_tor_ports.Add(host_ports)
             self.tor_host_ports.Add(tor_ports)
 
-            tor_ocs_link = timeflow_port_helper.Install(ns.NodeContainer(ns.NodeContainer(tor_node), ocs_switch))
-            tor_port = tor_ocs_link.Get(0)
-            ocs_port = tor_ocs_link.Get(1)
+            for _ in range(self.nb_link):
+                tor_ocs_link = timeflow_port_helper.Install(ns.NodeContainer(
+                    ns.NodeContainer(tor_node),
+                    ocs_switch
+                ))
+                tor_port = tor_ocs_link.Get(0)
+                ocs_port = tor_ocs_link.Get(1)
 
-            self.tor_ocs_ports.Add(tor_port)
-            tor_ports.Add(tor_port)
+                self.tor_ocs_ports.Add(tor_port)
+                tor_ports.Add(tor_port)
 
-            self.ocs_tor_ports.Add(ocs_port)
-            self.nodeid_to_ocs_port[tor_id] = ocs_port
+                self.ocs_tor_ports.Add(ocs_port)
 
             bridge_net_devices = timeflow_bridge_helper.Install(tor_node, tor_ports)
             self.tor_net_devices.Add(bridge_net_devices)
+        
+        self.setup_internet_stack(self.hosts, self.host_tor_ports)
+        self.populate_arp_tables(self.hosts)
 
 
-    def cal_node_port_to_ocs_port(self, node_id, port_id):
-        return self.nodeid_to_ocs_port.get(node_id)
+    def cal_node_port_to_ocs_port(self, tor_id, port_id):
+        port_id = tor_id * self.nb_link + port_id
+        return port_id
 
     def setup_ocs(self, ocs_slice_port1_port2, nb_time_slices, time_slice_duration_ms):
         ocs_helper = ns.OCSHelper()
@@ -119,7 +151,10 @@ class BackendNs3(Backend):
         schedule = ns.OCSSchedule()
 
 
-        for (ts, ocs_port1, ocs_port2) in ocs_slice_port1_port2:
+        for (ts, ocs_port1_id, ocs_port2_id) in ocs_slice_port1_port2:
+
+            ocs_port1 = self.ocs_tor_ports.Get(ocs_port1_id)
+            ocs_port2 = self.ocs_tor_ports.Get(ocs_port2_id)
 
             ocs_port1_mac = ns.Mac48Address.ConvertFrom(ocs_port1.GetAddress())
             ocs_port2_mac = ns.Mac48Address.ConvertFrom(ocs_port2.GetAddress())
@@ -152,7 +187,8 @@ class BackendNs3(Backend):
         # this will sometimes be a tor_ocs port and tor_host port
         # this will always be tor_ocs port
         hop = entry.hops[0]
-        out_port = self.tor_ocs_ports.Get(tor_id)
+        port_id = tor_id * self.nb_link + hop.send_port_or_node
+        out_port = self.tor_ocs_ports.Get(port_id)
 
 
         if entry.arrival_ts is None:
@@ -202,3 +238,19 @@ class BackendNs3(Backend):
         # node = self.mininet_net.nameToNode[f"tor{node_id}"]
         # #print(f"Load to ToR{node_id}:\n {commands}")
         # return utils.load_table(self.backend, node, commands)
+
+    @staticmethod
+    def setup_internet_stack(nodes, node_ports):
+        internet = ns.InternetStackHelper()
+        internet.Install(nodes)
+
+        ipv4 = ns.Ipv4AddressHelper()
+        ipv4.SetBase(ns.Ipv4Address("10.1.1.0"), ns.Ipv4Mask("255.255.255.0"))
+        # todo: the Ipv4AddressBase and mask can be taken as input
+        # todo: A check would be necessary to ensure that the address space is sufficient
+
+        ipv4.Assign(node_ports)
+
+    @staticmethod
+    def populate_arp_tables(nodes):
+        ns.TimeflowBridgeNetDevice.PopulateStaticArp(nodes)
