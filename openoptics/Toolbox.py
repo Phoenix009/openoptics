@@ -504,3 +504,13 @@ class BaseNetwork:
         for src, entries in entry_dict.items():
             self.backend.add_time_flow_entry(src, entries, routing_mode=routing_mode)
         return True
+    
+    def setup_echo_server_client(
+        self,
+        echoServerNode, echoServerAddress,
+        echoClientNode, echoClientAddress
+    ):
+        self.backend.setup_echo_server_client(
+            echoServerNode, echoServerAddress,
+            echoClientNode, echoClientAddress
+        )

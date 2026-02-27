@@ -40,6 +40,7 @@ class BackendNs3(Backend):
         self.ocs_tor_ports = ns.NetDeviceContainer()
 
         self.hosts = None
+        self.host_ip_interfaces = None
 
         # gives the net device object for the host (host_id) connected to tor (tor_id)
         # index using the tor_id * nb_host_per_tor + host_id
@@ -114,10 +115,8 @@ class BackendNs3(Backend):
         for tor_id in range(self.nb_node):
             tor_node = self.tors.Get(tor_id)
 
-            host_ports, tor_ports = self._connect_host_tor(tor_id, timeflow_port_helper)
-
-            self.host_tor_ports.Add(host_ports)
-            self.tor_host_ports.Add(tor_ports)
+            # ---------- connect tor to the ocs ---------------
+            tor_ports = ns.NetDeviceContainer()     # collect all tor ports
 
             for _ in range(self.nb_link):
                 tor_ocs_link = timeflow_port_helper.Install(ns.NodeContainer(
@@ -128,14 +127,22 @@ class BackendNs3(Backend):
                 ocs_port = tor_ocs_link.Get(1)
 
                 self.tor_ocs_ports.Add(tor_port)
+                self.ocs_tor_ports.Add(ocs_port)
                 tor_ports.Add(tor_port)
 
-                self.ocs_tor_ports.Add(ocs_port)
+            # ---------- connect tor to the hosts ---------------
+            host_tor_ports, tor_host_ports = self._connect_host_tor(tor_id, timeflow_port_helper)
+
+            self.host_tor_ports.Add(host_tor_ports)
+            self.tor_host_ports.Add(tor_host_ports)
+            tor_ports.Add(tor_host_ports)
 
             bridge_net_devices = timeflow_bridge_helper.Install(tor_node, tor_ports)
             self.tor_net_devices.Add(bridge_net_devices)
         
-        self.setup_internet_stack(self.hosts, self.host_tor_ports)
+        ip_interfaces = self.setup_internet_stack(self.hosts, self.host_tor_ports)
+        self.host_ip_interfaces = ip_interfaces
+
         self.populate_arp_tables(self.hosts)
 
 
@@ -168,46 +175,33 @@ class BackendNs3(Backend):
         ns.Simulator.Run()
         ns.Simulator.Destroy()
 
-    def add_time_flow_entry_perhop(
+    def add_entry(
         self,
-        tor_id,
-        entry,
-        nb_time_slices=None
+        tor_net_device,
+        arrival_ts,
+        dst_mac,
+        hops
     ):
-        if len(entry.hops) != 1:
-            print(
-                f"Warning: Find multi-hop time flow entry ({entry}) in Per-hop forwarding mode. Trim following hops."
-            )
-
-        tor_net_device = self.tor_net_devices.Get(tor_id)
-
-        dst_port = self.host_tor_ports.Get(entry.dst)
-        dst_mac = ns.Mac48Address.ConvertFrom(dst_port.GetAddress())
-
-        # this will sometimes be a tor_ocs port and tor_host port
-        # this will always be tor_ocs port
-        hop = entry.hops[0]
-        port_id = tor_id * self.nb_link + hop.send_port_or_node
-        out_port = self.tor_ocs_ports.Get(port_id)
-
-
-        if entry.arrival_ts is None:
+        
+        if arrival_ts is None:
             # Flow table with wildcard arrival time slice
-            for arrival_ts in range(nb_time_slices):
-                tor_net_device.addRouteEntry(
-                    arrival_ts,
-                    dst_mac,
-                    out_port,
-                    hop.send_ts
-                    )
+            for arrival_ts in range(self.nb_time_slices):
+                for hop in hops:
+                    tor_net_device.addHop(
+                        arrival_ts,
+                        dst_mac,
+                        hop.send_ts,
+                        hop.send_port_or_node
+                        )
         else:
             # Regular time flow table
-            tor_net_device.addRouteEntry(
-                entry.arrival_ts,
-                dst_mac,
-                out_port,
-                hop.send_ts
-                )
+            for hop in hops:
+                tor_net_device.addHop(
+                    arrival_ts,
+                    dst_mac,
+                    hop.send_ts,
+                    hop.send_port_or_node
+                    )
 
 
     def add_time_flow_entry(
@@ -220,24 +214,20 @@ class BackendNs3(Backend):
             entries = [entries]
         elif not isinstance(entries, list):
             raise ValueError("entries must be a TimeFlowEntry or a list of TimeFlowEntry")
-        
-        if routing_mode == "Source":
-            assert False, "Not implemented source routing in ns3 backend"
-            # for entry in entries:
-            #     commands += utils.tor_table_routing_source(entry, nb_time_slices=self.nb_time_slices)
-        elif routing_mode == "Per-hop":
-            for index, entry in enumerate(entries):
-                self.add_time_flow_entry_perhop(tor_id, entry, self.nb_time_slices)
-        else:
-            assert False, "Unsupported routing mode"
 
-        # if f"tor{tor_id}" not in self.mininet_net.nameToNode.keys():
-        #     print(f"Error: Try deploying paths to non-existent node: node{node_id}.")
-        #     return False
+        for index, entry in enumerate(entries):
+            tor_net_device = self.tor_net_devices.Get(tor_id)
 
-        # node = self.mininet_net.nameToNode[f"tor{node_id}"]
-        # #print(f"Load to ToR{node_id}:\n {commands}")
-        # return utils.load_table(self.backend, node, commands)
+            dst_port = self.host_tor_ports.Get(entry.dst)
+            dst_mac = ns.Mac48Address.ConvertFrom(dst_port.GetAddress())
+
+            self.add_entry(
+                tor_net_device,
+                entry.arrival_ts,
+                dst_mac,
+                entry.hops
+            )
+
 
     @staticmethod
     def setup_internet_stack(nodes, node_ports):
@@ -249,8 +239,37 @@ class BackendNs3(Backend):
         # todo: the Ipv4AddressBase and mask can be taken as input
         # todo: A check would be necessary to ensure that the address space is sufficient
 
-        ipv4.Assign(node_ports)
+        ip_interfaces = ipv4.Assign(node_ports)
+        return ip_interfaces
 
     @staticmethod
     def populate_arp_tables(nodes):
         ns.TimeflowBridgeNetDevice.PopulateStaticArp(nodes)
+
+    @staticmethod
+    def setup_echo_server_client(
+        echoServerNode, echoServerAddress,
+        echoClientNode, echoClientAddress
+    ):
+        # Create UDP echo server on node 0 and client on node 1
+
+
+        print(f"Server IP: {echoServerAddress}")
+        print(f"Client IP: {echoClientAddress}")
+
+
+        port = 9  # Discard port (RFC 863)
+
+        echoServerHelper = ns.UdpEchoServerHelper(port)
+        serverApps = echoServerHelper.Install(echoServerNode)
+        serverApps.Start(ns.Seconds(1))
+        serverApps.Stop(ns.Seconds(20))
+
+        echoClientHelper = ns.UdpEchoClientHelper(echoServerAddress.ConvertTo(), port)
+        echoClientHelper.SetAttribute("MaxPackets", ns.UintegerValue(10))
+        echoClientHelper.SetAttribute("Interval", ns.TimeValue(ns.Seconds(1)))
+        echoClientHelper.SetAttribute("PacketSize", ns.UintegerValue(1024))
+
+        clientApps = echoClientHelper.Install(ns.NodeContainer(echoClientNode))
+        clientApps.Start(ns.Seconds(2))
+        clientApps.Stop(ns.Seconds(20))

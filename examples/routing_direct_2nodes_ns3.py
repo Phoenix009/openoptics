@@ -16,34 +16,29 @@ except ModuleNotFoundError:
         " or your PYTHONPATH might not be properly configured"
     )
 
-
 if __name__ == "__main__":
-    nb_node = 4
-
     net = Toolbox.BaseNetwork(
         name="my_network",
         backend="ns3",
-        nb_node=nb_node,
+        nb_node=8,
         time_slice_duration_ms=200,  # in ms
         use_webserver=True,
     )
 
-    circuits = OpticalTopo.round_robin(nb_node=nb_node)
+    circuits = OpticalTopo.round_robin(nb_node=8)
     # print(circuits)
     assert net.deploy_topo(circuits)
 
-
-    paths = OpticalRouting.routing_direct(net.get_topo())
+    paths = OpticalRouting.find_direct_path(net.get_topo(), node1=0, node2=1)
+    paths.extend(OpticalRouting.find_direct_path(net.get_topo(), node1=1, node2=0))
     net.deploy_routing(paths, routing_mode="Per-hop")
 
     # ------------ setup echo client and server ------------
-    host_count = net.backend.hosts.GetN()
-
     echoServerNode = net.backend.hosts.Get(0)
     echoServerAddress = net.backend.host_ip_interfaces.GetAddress(0)
 
-    echoClientNode = net.backend.hosts.Get(host_count-1)
-    echoClientAddress = net.backend.host_ip_interfaces.GetAddress(host_count-1)
+    echoClientNode = net.backend.hosts.Get(1)
+    echoClientAddress = net.backend.host_ip_interfaces.GetAddress(1)
 
     net.setup_echo_server_client(
         echoServerNode, echoServerAddress,
@@ -51,7 +46,3 @@ if __name__ == "__main__":
     )
 
     net.start()
-
-
-# implementing TOR function. refere internet helper
-# forwarding based on time flow table
