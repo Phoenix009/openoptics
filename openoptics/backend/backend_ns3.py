@@ -133,6 +133,10 @@ class BackendNs3(Backend):
             # ---------- connect tor to the hosts ---------------
             host_tor_ports, tor_host_ports = self._connect_host_tor(tor_id, timeflow_port_helper)
 
+            # mark host_tor_ports as ingress ports
+            ns.TimeflowBridgeNetDevice.MarkIngressPorts(tor_host_ports)
+
+
             self.host_tor_ports.Add(host_tor_ports)
             self.tor_host_ports.Add(tor_host_ports)
             tor_ports.Add(tor_host_ports)
@@ -215,8 +219,10 @@ class BackendNs3(Backend):
         elif not isinstance(entries, list):
             raise ValueError("entries must be a TimeFlowEntry or a list of TimeFlowEntry")
 
+        tor_net_device = self.tor_net_devices.Get(tor_id)
+        tor_net_device.SetRoutingMode(0 if routing_mode == 'Source' else 1)
+
         for index, entry in enumerate(entries):
-            tor_net_device = self.tor_net_devices.Get(tor_id)
 
             dst_port = self.host_tor_ports.Get(entry.dst)
             dst_mac = ns.Mac48Address.ConvertFrom(dst_port.GetAddress())
@@ -236,9 +242,6 @@ class BackendNs3(Backend):
 
         ipv4 = ns.Ipv4AddressHelper()
         ipv4.SetBase(ns.Ipv4Address("10.1.1.0"), ns.Ipv4Mask("255.255.255.0"))
-        # todo: the Ipv4AddressBase and mask can be taken as input
-        # todo: A check would be necessary to ensure that the address space is sufficient
-
         ip_interfaces = ipv4.Assign(node_ports)
         return ip_interfaces
 
